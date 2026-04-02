@@ -272,7 +272,8 @@ export default function App() {
           
           const isUserAdmin = profile?.is_admin || userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
           setIsAdmin(isUserAdmin);
-          fetchData();
+          if (isUserAdmin) setView('accesses');
+          fetchData(userEmail, isUserAdmin);
         }
       } catch (error) {
         console.error('Error checking session:', error);
@@ -300,7 +301,8 @@ export default function App() {
           
         const isUserAdmin = profile?.is_admin || userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
         setIsAdmin(isUserAdmin);
-        fetchData();
+        if (isUserAdmin) setView('accesses');
+        fetchData(userEmail, isUserAdmin);
       } else {
         setUser(null);
         setIsAdmin(false);
@@ -310,13 +312,28 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = async (overrideEmail?: string, overrideIsAdmin?: boolean) => {
     if (!isSupabaseConfigured) return;
+    
+    const targetEmail = (overrideEmail || user?.email)?.toLowerCase();
+    const targetIsAdmin = overrideIsAdmin !== undefined ? overrideIsAdmin : isAdmin;
+    
+    if (!targetEmail) return;
+    
     setIsLoading(true);
     try {
+      let salesQuery = supabase.from('sales').select('*').order('data', { ascending: false });
+      let productsQuery = supabase.from('products').select('*').order('name');
+      
+      // Data Isolation: If not admin, strictly filter by user_email
+      if (!targetIsAdmin) {
+        salesQuery = salesQuery.eq('user_email', targetEmail);
+        productsQuery = productsQuery.eq('user_email', targetEmail);
+      }
+
       const [salesRes, productsRes, accessesRes] = await Promise.all([
-        supabase.from('sales').select('*').order('data', { ascending: false }),
-        supabase.from('products').select('*').order('name'),
+        salesQuery,
+        productsQuery,
         supabase.from('accesses').select('*').order('created_at', { ascending: false })
       ]);
 
@@ -342,7 +359,8 @@ export default function App() {
     if (isAdminEmail && authPassword === 'admin123') {
       setUser({ email: userEmail });
       setIsAdmin(true);
-      fetchData();
+      setView('accesses');
+      fetchData(userEmail, true);
       setIsAuthLoading(false);
       return;
     }
@@ -366,8 +384,10 @@ export default function App() {
           setUser({ email: userEmail });
           // Acessos gerados pelo painel NUNCA são admin, 
           // a menos que o e-mail seja um dos e-mails mestres.
-          setIsAdmin(isAdminEmail);
-          fetchData();
+          const isUserAdmin = isAdminEmail;
+          setIsAdmin(isUserAdmin);
+          if (isUserAdmin) setView('accesses');
+          fetchData(userEmail, isUserAdmin);
         } else {
           if (error.message.includes('Email not confirmed')) {
             setAuthError('E-mail ainda não confirmado no Supabase. Verifique sua caixa de entrada.');
@@ -388,6 +408,9 @@ export default function App() {
     await supabase.auth.signOut();
     setUser(null);
     setIsAdmin(false);
+    setSales([]);
+    setProducts([]);
+    setAccesses([]);
     setView('sales');
   };
 
@@ -624,7 +647,7 @@ export default function App() {
     
     setIsSaving(true);
     const saleData = {
-      user_email: user.email,
+      user_email: user.email.toLowerCase(),
       nome: formData.nome,
       descricao: formData.descricao,
       quantidade: formData.quantidade,
@@ -643,7 +666,8 @@ export default function App() {
         const { error } = await supabase
           .from('sales')
           .update(saleData)
-          .eq('id', editingSale.id);
+          .eq('id', editingSale.id)
+          .eq('user_email', user.email);
         if (error) throw error;
         showNotification('Venda atualizada com sucesso!');
       } else {
@@ -679,7 +703,7 @@ export default function App() {
 
     setIsSaving(true);
     const productData = {
-      user_email: user.email,
+      user_email: user.email.toLowerCase(),
       name: productFormData.name,
       price: productFormData.price
     };
@@ -691,7 +715,8 @@ export default function App() {
         const { error } = await supabase
           .from('products')
           .update(productData)
-          .eq('id', editingProduct.id);
+          .eq('id', editingProduct.id)
+          .eq('user_email', user.email);
         if (error) throw error;
         showNotification('Produto atualizado com sucesso!');
       } else {
@@ -716,7 +741,8 @@ export default function App() {
       const { error } = await supabase
         .from('sales')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_email', user?.email.toLowerCase());
       if (error) throw error;
       fetchData();
       setIsDeleteModalOpen(null);
@@ -730,7 +756,8 @@ export default function App() {
       const { error } = await supabase
         .from('products')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_email', user?.email.toLowerCase());
       if (error) throw error;
       fetchData();
       setIsProductDeleteModalOpen(null);
@@ -1235,33 +1262,37 @@ export default function App() {
             </div>
             
             <nav className="hidden sm:flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-              <button 
-                onClick={() => setView('sales')}
-                className={cn(
-                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                  view === 'sales' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
-                )}
-              >
-                <ShoppingBag className="w-4 h-4" /> Vendas
-              </button>
-              <button 
-                onClick={() => setView('products')}
-                className={cn(
-                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                  view === 'products' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
-                )}
-              >
-                <Tag className="w-4 h-4" /> Catálogo
-              </button>
-              <button 
-                onClick={() => setView('customers')}
-                className={cn(
-                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                  view === 'customers' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
-                )}
-              >
-                <Users className="w-4 h-4" /> Clientes
-              </button>
+              {!isAdmin && (
+                <>
+                  <button 
+                    onClick={() => setView('sales')}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                      view === 'sales' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    <ShoppingBag className="w-4 h-4" /> Vendas
+                  </button>
+                  <button 
+                    onClick={() => setView('products')}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                      view === 'products' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    <Tag className="w-4 h-4" /> Catálogo
+                  </button>
+                  <button 
+                    onClick={() => setView('customers')}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                      view === 'customers' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    <Users className="w-4 h-4" /> Clientes
+                  </button>
+                </>
+              )}
               {isAdmin && (
                 <button 
                   onClick={() => setView('accesses')}
@@ -1304,39 +1335,43 @@ export default function App() {
 
       {/* Mobile Nav */}
       <div className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-lg border-t border-slate-200 px-6 py-3 flex justify-between items-center shadow-[0_-10px_20px_rgba(0,0,0,0.05)]">
-        <button 
-          onClick={() => setView('sales')}
-          className={cn(
-            "flex flex-col items-center gap-1 transition-all",
-            view === 'sales' ? "text-primary scale-110" : "text-slate-400"
-          )}
-          style={view === 'sales' ? { color: primaryColor } : {}}
-        >
-          <ShoppingBag className="w-6 h-6" />
-          <span className="text-[10px] font-black uppercase tracking-tighter">Vendas</span>
-        </button>
-        <button 
-          onClick={() => setView('products')}
-          className={cn(
-            "flex flex-col items-center gap-1 transition-all",
-            view === 'products' ? "text-primary scale-110" : "text-slate-400"
-          )}
-          style={view === 'products' ? { color: primaryColor } : {}}
-        >
-          <Tag className="w-6 h-6" />
-          <span className="text-[10px] font-black uppercase tracking-tighter">Catálogo</span>
-        </button>
-        <button 
-          onClick={() => setView('customers')}
-          className={cn(
-            "flex flex-col items-center gap-1 transition-all",
-            view === 'customers' ? "text-primary scale-110" : "text-slate-400"
-          )}
-          style={view === 'customers' ? { color: primaryColor } : {}}
-        >
-          <Users className="w-6 h-6" />
-          <span className="text-[10px] font-black uppercase tracking-tighter">Clientes</span>
-        </button>
+        {!isAdmin && (
+          <>
+            <button 
+              onClick={() => setView('sales')}
+              className={cn(
+                "flex flex-col items-center gap-1 transition-all",
+                view === 'sales' ? "text-primary scale-110" : "text-slate-400"
+              )}
+              style={view === 'sales' ? { color: primaryColor } : {}}
+            >
+              <ShoppingBag className="w-6 h-6" />
+              <span className="text-[10px] font-black uppercase tracking-tighter">Vendas</span>
+            </button>
+            <button 
+              onClick={() => setView('products')}
+              className={cn(
+                "flex flex-col items-center gap-1 transition-all",
+                view === 'products' ? "text-primary scale-110" : "text-slate-400"
+              )}
+              style={view === 'products' ? { color: primaryColor } : {}}
+            >
+              <Tag className="w-6 h-6" />
+              <span className="text-[10px] font-black uppercase tracking-tighter">Catálogo</span>
+            </button>
+            <button 
+              onClick={() => setView('customers')}
+              className={cn(
+                "flex flex-col items-center gap-1 transition-all",
+                view === 'customers' ? "text-primary scale-110" : "text-slate-400"
+              )}
+              style={view === 'customers' ? { color: primaryColor } : {}}
+            >
+              <Users className="w-6 h-6" />
+              <span className="text-[10px] font-black uppercase tracking-tighter">Clientes</span>
+            </button>
+          </>
+        )}
         {isAdmin && (
           <button 
             onClick={() => setView('accesses')}
@@ -1567,6 +1602,32 @@ export default function App() {
                 {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
                 Testar Banco
               </button>
+            </div>
+
+            {/* Admin Dashboard Stats */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <StatCard 
+                title="Total a Receber" 
+                value={formatCurrency(accesses.reduce((acc, curr) => acc + (curr.valor_pago || 0), 0))}
+                subtitle="Soma de todos os acessos"
+                icon={<Banknote className="w-5 h-5 text-emerald-600" />}
+                color="emerald"
+              />
+              <StatCard 
+                title="Acessos Ativos" 
+                value={accesses.filter(a => parseISO(a.data_validade) > new Date()).length.toString()}
+                subtitle="Dentro da validade"
+                icon={<CheckCircle2 className="w-5 h-5 text-blue-600" />}
+                color="indigo"
+                primaryColor={primaryColor}
+              />
+              <StatCard 
+                title="Acessos Expirados" 
+                value={accesses.filter(a => parseISO(a.data_validade) <= new Date()).length.toString()}
+                subtitle="Necessitam renovação"
+                icon={<Clock className="w-5 h-5 text-amber-600" />}
+                color="amber"
+              />
             </div>
 
             <div className="flex flex-col gap-3">
@@ -2232,17 +2293,18 @@ export default function App() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Valor Pago (R$)</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Valor a Pagar (Obrigatório) (R$)</label>
                   <div className="relative">
                     <Banknote className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input 
                       type="number" 
                       required
                       step="0.01"
-                      value={accessFormData.valor_pago}
-                      onChange={(e) => setAccessFormData({...accessFormData, valor_pago: parseFloat(e.target.value)})}
+                      min="0.01"
+                      value={accessFormData.valor_pago || ''}
+                      onChange={(e) => setAccessFormData({...accessFormData, valor_pago: parseFloat(e.target.value) || 0})}
                       className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
-                      placeholder="0,00"
+                      placeholder="Valor que o usuário irá pagar"
                     />
                   </div>
                 </div>
