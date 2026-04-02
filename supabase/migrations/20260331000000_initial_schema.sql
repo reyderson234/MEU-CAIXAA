@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS products (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name TEXT NOT NULL,
   price NUMERIC NOT NULL DEFAULT 0,
+  cost NUMERIC NOT NULL DEFAULT 0,
   user_email TEXT NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS sales (
   descricao TEXT,
   quantidade INTEGER NOT NULL DEFAULT 1,
   valor NUMERIC NOT NULL DEFAULT 0,
+  cost NUMERIC NOT NULL DEFAULT 0,
   status TEXT NOT NULL CHECK (status IN ('pago', 'pendente')),
   metodo_pagamento TEXT CHECK (metodo_pagamento IN ('pix', 'dinheiro', 'cartao')),
   cliente_nome TEXT,

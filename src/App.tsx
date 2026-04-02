@@ -12,6 +12,7 @@ import {
   Package, 
   Calendar, 
   ChevronRight,
+  ChevronDown,
   X,
   Check,
   Filter,
@@ -90,6 +91,7 @@ interface Product {
   id: string;
   name: string;
   price: number;
+  cost: number;
   user_email?: string;
   created_at?: string;
 }
@@ -102,6 +104,7 @@ interface Sale {
   descricao: string;
   quantidade: number;
   valor: number;
+  cost: number;
   status: 'pago' | 'pendente';
   metodo_pagamento?: 'pix' | 'dinheiro' | 'cartao';
   cliente_nome?: string;
@@ -182,6 +185,33 @@ export default function App() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerSort, setCustomerSort] = useState<'date' | 'value' | 'name'>('date');
   const [customerStatusFilter, setCustomerStatusFilter] = useState<'all' | 'active' | 'pending'>('all');
+  const [dashboardRangeType, setDashboardRangeType] = useState<'today' | 'yesterday' | 'week' | 'month' | 'lastMonth' | 'custom'>('month');
+  const [dashboardStartDate, setDashboardStartDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [dashboardEndDate, setDashboardEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
+
+  // Update dates when range type changes
+  useEffect(() => {
+    const now = new Date();
+    if (dashboardRangeType === 'today') {
+      setDashboardStartDate(format(now, 'yyyy-MM-dd'));
+      setDashboardEndDate(format(now, 'yyyy-MM-dd'));
+    } else if (dashboardRangeType === 'yesterday') {
+      const yesterday = subDays(now, 1);
+      setDashboardStartDate(format(yesterday, 'yyyy-MM-dd'));
+      setDashboardEndDate(format(yesterday, 'yyyy-MM-dd'));
+    } else if (dashboardRangeType === 'week') {
+      setDashboardStartDate(format(subDays(now, 6), 'yyyy-MM-dd'));
+      setDashboardEndDate(format(now, 'yyyy-MM-dd'));
+    } else if (dashboardRangeType === 'month') {
+      setDashboardStartDate(format(startOfMonth(now), 'yyyy-MM-dd'));
+      setDashboardEndDate(format(now, 'yyyy-MM-dd'));
+    } else if (dashboardRangeType === 'lastMonth') {
+      const lastMonth = subMonths(now, 1);
+      setDashboardStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
+      setDashboardEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
+    }
+  }, [dashboardRangeType]);
   
   // Auth states
   const [authEmail, setAuthEmail] = useState('reydersonp50@gmail.com');
@@ -194,6 +224,7 @@ export default function App() {
     descricao: '',
     quantidade: 1,
     valor: 0,
+    cost: 0,
     status: 'pago' as 'pago' | 'pendente',
     metodo_pagamento: 'pix' as 'pix' | 'dinheiro' | 'cartao',
     cliente_nome: '',
@@ -203,7 +234,8 @@ export default function App() {
 
   const [productFormData, setProductFormData] = useState({
     name: '',
-    price: 0
+    price: 0,
+    cost: 0
   });
 
   const [accessFormData, setAccessFormData] = useState({
@@ -497,20 +529,23 @@ export default function App() {
   }, [sales, filter]);
 
   const groupedSales = useMemo(() => {
-    const now = new Date();
-    const sevenDaysAgo = startOfDay(subDays(now, 7));
-    const thisMonthStart = startOfMonth(now);
-    const lastMonthStart = startOfMonth(subMonths(now, 1));
-    const lastMonthEnd = endOfMonth(subMonths(now, 1));
+    const startStr = dashboardStartDate;
+    const endStr = dashboardEndDate;
+    
+    const referenceDate = parseISO(dashboardEndDate);
+    const thisMonthStart = startOfMonth(referenceDate);
+    const thisMonthEnd = endOfMonth(referenceDate);
+    const lastMonthStart = startOfMonth(subMonths(referenceDate, 1));
+    const lastMonthEnd = endOfMonth(subMonths(referenceDate, 1));
 
-    const last7Days = sales.filter(s => {
-      const d = parseISO(s.data);
-      return d >= sevenDaysAgo;
+    const selectedRange = sales.filter(s => {
+      const saleDateStr = s.data.substring(0, 10);
+      return saleDateStr >= startStr && saleDateStr <= endStr;
     }).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
     const thisMonth = sales.filter(s => {
       const d = parseISO(s.data);
-      return d >= thisMonthStart && d < sevenDaysAgo;
+      return d >= thisMonthStart && d <= thisMonthEnd;
     }).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
     const lastMonth = sales.filter(s => {
@@ -518,8 +553,8 @@ export default function App() {
       return d >= lastMonthStart && d <= lastMonthEnd;
     }).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
-    return { last7Days, thisMonth, lastMonth };
-  }, [sales]);
+    return { selectedRange, thisMonth, lastMonth };
+  }, [sales, dashboardStartDate, dashboardEndDate]);
 
   const filteredCustomers = useMemo(() => {
     let result = [...customers];
@@ -562,42 +597,41 @@ export default function App() {
   }, [customers]);
 
   const stats = useMemo(() => {
-    const now = new Date();
-    const today = startOfDay(now);
-    const weekStart = startOfWeek(now, { weekStartsOn: 1 });
-    const monthStart = startOfMonth(now);
+    const rangeStart = startOfDay(parseISO(dashboardStartDate));
+    const rangeEnd = endOfDay(parseISO(dashboardEndDate));
     
-    const monthEnd = endOfMonth(now);
-    const weekEnd = endOfWeek(now, { weekStartsOn: 1 });
+    const realToday = new Date();
 
-    const lastMonthStart = startOfMonth(subMonths(now, 1));
+    const lastMonthStart = startOfMonth(subMonths(realToday, 1));
+    const lastMonthEnd = endOfMonth(subMonths(realToday, 1));
 
-    const getStatsForRange = (rangeStart: Date, rangeEnd: Date) => {
+    const getStatsForRange = (start: Date, end: Date) => {
+      const startStr = format(start, 'yyyy-MM-dd');
+      const endStr = format(end, 'yyyy-MM-dd');
+      
       const rangeSales = sales.filter(s => {
-        const saleDate = parseISO(s.data);
-        return saleDate >= rangeStart && saleDate <= rangeEnd;
+        const saleDateStr = s.data.substring(0, 10);
+        return saleDateStr >= startStr && saleDateStr <= endStr;
       });
+      const total = rangeSales.reduce((acc, s) => acc + (Number(s.valor || 0) * s.quantidade), 0);
+      const expenses = rangeSales.reduce((acc, s) => acc + (Number(s.cost || 0) * s.quantidade), 0);
       return {
-        total: rangeSales.reduce((acc, s) => acc + s.valor, 0),
-        paid: rangeSales.filter(s => s.status === 'pago').reduce((acc, s) => acc + s.valor, 0),
-        pending: rangeSales.filter(s => s.status === 'pendente').reduce((acc, s) => acc + s.valor, 0),
+        total,
+        expenses,
+        profit: total - expenses,
+        paid: rangeSales.filter(s => s.status === 'pago').reduce((acc, s) => acc + (s.valor * s.quantidade), 0),
+        pending: rangeSales.filter(s => s.status === 'pendente').reduce((acc, s) => acc + (s.valor * s.quantidade), 0),
         count: rangeSales.length,
         items: rangeSales.reduce((acc, s) => acc + s.quantidade, 0)
       };
     };
 
-    const twoMonthsSales = sales.filter(s => {
-      const saleDate = parseISO(s.data);
-      return saleDate >= lastMonthStart && saleDate <= monthEnd && s.status === 'pago';
-    });
-
     return {
-      today: getStatsForRange(today, endOfDay(now)),
-      week: getStatsForRange(weekStart, weekEnd),
-      month: getStatsForRange(monthStart, monthEnd),
-      twoMonthsTotal: twoMonthsSales.reduce((acc, s) => acc + s.valor, 0)
+      selectedRange: getStatsForRange(rangeStart, rangeEnd),
+      realToday: getStatsForRange(startOfDay(realToday), endOfDay(realToday)),
+      lastMonth: getStatsForRange(lastMonthStart, lastMonthEnd)
     };
-  }, [sales]);
+  }, [sales, dashboardStartDate, dashboardEndDate]);
 
   // Handlers
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -609,7 +643,8 @@ export default function App() {
         setFormData(prev => ({
           ...prev,
           nome: selectedProduct.name,
-          valor: selectedProduct.price
+          valor: selectedProduct.price,
+          cost: selectedProduct.cost || 0
         }));
         return;
       }
@@ -617,7 +652,7 @@ export default function App() {
 
     // Logic to clear 0 when typing in numeric fields
     let finalValue: any = value;
-    if (name === 'quantidade' || name === 'valor') {
+    if (name === 'quantidade' || name === 'valor' || name === 'cost') {
       // If the current value is 0 and the user types something, we might want to replace it.
       // But standard input type="number" handles some of this.
       // However, the user specifically asked to "apaga o 0 que tem".
@@ -634,7 +669,7 @@ export default function App() {
     const { name, value } = e.target;
     setProductFormData(prev => ({
       ...prev,
-      [name]: name === 'price' ? Number(value) : value
+      [name]: (name === 'price' || name === 'cost') ? Number(value) : value
     }));
   };
 
@@ -652,11 +687,12 @@ export default function App() {
       descricao: formData.descricao,
       quantidade: formData.quantidade,
       valor: formData.valor,
+      cost: formData.cost,
       status: formData.status,
       metodo_pagamento: formData.metodo_pagamento,
       cliente_nome: formData.cliente_nome,
       cliente_whatsapp: formData.cliente_whatsapp,
-      data: new Date(formData.date + 'T12:00:00').toISOString()
+      data: formData.date + 'T12:00:00.000Z'
     };
 
     console.log('Saving sale:', saleData);
@@ -705,7 +741,8 @@ export default function App() {
     const productData = {
       user_email: user.email.toLowerCase(),
       name: productFormData.name,
-      price: productFormData.price
+      price: productFormData.price,
+      cost: productFormData.cost
     };
 
     console.log('Saving product:', productData);
@@ -773,7 +810,8 @@ export default function App() {
         nome: sale.nome,
         descricao: sale.descricao || '',
         quantidade: sale.quantidade,
-        valor: sale.valor / sale.quantidade, // Store unit price in form
+        valor: sale.valor, // Store unit price in form
+        cost: sale.cost || 0,
         status: sale.status || 'pago',
         metodo_pagamento: sale.metodo_pagamento || 'pix',
         cliente_nome: sale.cliente_nome || '',
@@ -787,6 +825,7 @@ export default function App() {
         descricao: '',
         quantidade: 1,
         valor: 0,
+        cost: 0,
         status: 'pago',
         metodo_pagamento: 'pix',
         cliente_nome: '',
@@ -802,13 +841,15 @@ export default function App() {
       setEditingProduct(product);
       setProductFormData({
         name: product.name,
-        price: product.price
+        price: product.price,
+        cost: product.cost || 0
       });
     } else {
       setEditingProduct(null);
       setProductFormData({
         name: '',
-        price: 0
+        price: 0,
+        cost: 0
       });
     }
     setIsProductFormOpen(true);
@@ -1391,45 +1432,163 @@ export default function App() {
         {view === 'sales' ? (
           <>
             {/* Dashboard Stats */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 relative overflow-hidden shadow-sm">
-              <div 
-                className="absolute inset-0 opacity-5 pointer-events-none"
-                style={{ background: `radial-gradient(circle at 0% 0%, ${primaryColor}, transparent 50%)` }}
-              />
-              <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 relative z-10">
-                <StatCard 
-                  title="Total Hoje" 
-                  value={formatCurrency(stats.today.total)} 
-                  subtitle={`${stats.today.count} vendas hoje`}
-                  icon={<Calendar className="w-5 h-5" style={{ color: primaryColor }} />}
-                  color="indigo"
-                  primaryColor={primaryColor}
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 relative overflow-hidden shadow-sm">
+                <div 
+                  className="absolute inset-0 opacity-5 pointer-events-none"
+                  style={{ background: `radial-gradient(circle at 0% 0%, ${primaryColor}, transparent 50%)` }}
                 />
-                <StatCard 
-                  title="Pago esse Mês" 
-                  value={formatCurrency(stats.month.paid)} 
-                  subtitle="Recebido este mês"
-                  icon={<CheckCircle2 className="w-5 h-5 text-emerald-500" />}
-                  color="indigo"
-                  primaryColor={primaryColor}
-                />
-                <StatCard 
-                  title="Total Pendente" 
-                  value={formatCurrency(stats.month.pending)} 
-                  subtitle="A receber este mês"
-                  icon={<Clock className="w-5 h-5 text-amber-500" />}
-                  color="indigo"
-                  primaryColor={primaryColor}
-                />
-                <StatCard 
-                  title="Total Pago" 
-                  value={formatCurrency(stats.twoMonthsTotal)} 
-                  subtitle="Mês atual + Mês passado"
-                  icon={<TrendingUp className="w-5 h-5" style={{ color: primaryColor }} />}
-                  color="indigo"
-                  primaryColor={primaryColor}
-                />
-              </section>
+                <div className="relative z-10 space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Resumo Financeiro</h3>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button 
+                        onClick={() => setDashboardRangeType('lastMonth')}
+                        className={cn(
+                          "px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border flex items-center gap-1.5",
+                          dashboardRangeType === 'lastMonth' 
+                            ? "bg-amber-500 text-white border-amber-600 shadow-sm" 
+                            : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                        )}
+                      >
+                        <Calendar className="w-3 h-3" />
+                        Mês Passado
+                      </button>
+                      <div className="relative">
+                        <button 
+                          onClick={() => setIsRangePickerOpen(!isRangePickerOpen)}
+                          className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full border border-slate-200 hover:bg-slate-200 transition-all active:scale-95"
+                        >
+                          <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                          <span className="text-[10px] font-bold text-slate-600 uppercase">
+                            {dashboardRangeType === 'custom' 
+                              ? `${format(parseISO(dashboardStartDate), 'dd/MM')} - ${format(parseISO(dashboardEndDate), 'dd/MM')}`
+                              : dashboardRangeType === 'today' ? 'Hoje'
+                              : dashboardRangeType === 'yesterday' ? 'Ontem'
+                              : dashboardRangeType === 'week' ? 'Últimos 7 Dias'
+                              : dashboardRangeType === 'month' ? 'Este Mês'
+                              : 'Mês Passado'}
+                          </span>
+                          <ChevronDown className={cn("w-3 h-3 text-slate-400 transition-transform", isRangePickerOpen && "rotate-180")} />
+                        </button>
+
+                        <AnimatePresence>
+                          {isRangePickerOpen && (
+                            <>
+                              <div 
+                                className="fixed inset-0 z-40" 
+                                onClick={() => setIsRangePickerOpen(false)} 
+                              />
+                              <motion.div 
+                                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                className="absolute top-full right-0 mt-2 w-64 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden p-2"
+                              >
+                                <div className="grid grid-cols-1 gap-1">
+                                  {[
+                                    { id: 'today', label: 'Hoje' },
+                                    { id: 'yesterday', label: 'Ontem' },
+                                    { id: 'week', label: 'Últimos 7 Dias' },
+                                    { id: 'month', label: 'Este Mês' },
+                                    { id: 'lastMonth', label: 'Mês Passado' },
+                                    { id: 'custom', label: 'Personalizado' }
+                                  ].map((opt) => (
+                                    <button
+                                      key={opt.id}
+                                      onClick={() => {
+                                        setDashboardRangeType(opt.id as any);
+                                        if (opt.id !== 'custom') setIsRangePickerOpen(false);
+                                      }}
+                                      className={cn(
+                                        "w-full text-left px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all",
+                                        dashboardRangeType === opt.id 
+                                          ? "bg-primary text-white" 
+                                          : "text-slate-600 hover:bg-slate-50"
+                                      )}
+                                      style={dashboardRangeType === opt.id ? { backgroundColor: primaryColor } : {}}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                {dashboardRangeType === 'custom' && (
+                                  <div className="mt-2 p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-3">
+                                    <div className="space-y-1">
+                                      <label className="text-[9px] font-bold text-slate-400 uppercase">Início</label>
+                                      <input 
+                                        type="date" 
+                                        value={dashboardStartDate}
+                                        onChange={(e) => setDashboardStartDate(e.target.value)}
+                                        className="w-full text-[10px] font-bold text-slate-600 bg-white px-2 py-1.5 rounded-lg border border-slate-200 outline-none"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="text-[9px] font-bold text-slate-400 uppercase">Fim</label>
+                                      <input 
+                                        type="date" 
+                                        value={dashboardEndDate}
+                                        onChange={(e) => setDashboardEndDate(e.target.value)}
+                                        className="w-full text-[10px] font-bold text-slate-600 bg-white px-2 py-1.5 rounded-lg border border-slate-200 outline-none"
+                                      />
+                                    </div>
+                                    <button 
+                                      onClick={() => setIsRangePickerOpen(false)}
+                                      className="w-full py-2 bg-primary text-white rounded-lg text-[10px] font-bold shadow-sm"
+                                      style={{ backgroundColor: primaryColor }}
+                                    >
+                                      Aplicar
+                                    </button>
+                                  </div>
+                                )}
+                              </motion.div>
+                            </>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                      <div className="hidden sm:flex items-center gap-2 text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1.5 rounded-full border border-slate-200">
+                        <Clock className="w-3 h-3" /> Atualizado agora
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <StatCard 
+                      title="Vendas no Período" 
+                      value={formatCurrency(stats.selectedRange.total)} 
+                      subtitle={`${stats.selectedRange.count} vendas realizadas`}
+                      icon={<ShoppingBag className="w-5 h-5" style={{ color: primaryColor }} />}
+                      color="indigo"
+                      primaryColor={primaryColor}
+                    />
+                    <StatCard 
+                      title="Lucro Líquido" 
+                      value={formatCurrency(stats.selectedRange.profit)} 
+                      subtitle="Vendas - Despesas"
+                      icon={<TrendingUp className="w-5 h-5 text-emerald-500" />}
+                      color="emerald"
+                      primaryColor={primaryColor}
+                    />
+                    <StatCard 
+                      title="Vendas Pendentes" 
+                      value={formatCurrency(stats.selectedRange.pending)} 
+                      subtitle="Total a receber no período"
+                      icon={<Clock className="w-5 h-5 text-amber-500" />}
+                      color="amber"
+                      primaryColor={primaryColor}
+                    />
+                    <StatCard 
+                      title="Despesa Total" 
+                      value={formatCurrency(stats.selectedRange.expenses)} 
+                      subtitle="Custo total dos produtos"
+                      icon={<AlertCircle className="w-5 h-5 text-rose-500" />}
+                      color="rose"
+                      primaryColor={primaryColor}
+                    />
+                  </section>
+                </div>
+              </div>
             </div>
 
         {/* Filters & List */}
@@ -1444,19 +1603,24 @@ export default function App() {
           </div>
 
           <div className="space-y-8">
-            {/* Últimos 7 Dias */}
+            {/* Vendas no Período Selecionado */}
             <div className="space-y-3">
-              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-primary" style={{ backgroundColor: primaryColor }} />
-                Últimos 7 Dias
-                <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-                  {groupedSales.last7Days.length}
-                </span>
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-primary" style={{ backgroundColor: primaryColor }} />
+                  Vendas no Período ({format(parseISO(dashboardStartDate), 'dd/MM')} - {format(parseISO(dashboardEndDate), 'dd/MM')})
+                  <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                    {groupedSales.selectedRange.length}
+                  </span>
+                </h3>
+                <div className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-1 rounded-lg border border-rose-100">
+                  Total Despesa: {formatCurrency(stats.selectedRange.expenses)}
+                </div>
+              </div>
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                {groupedSales.last7Days.length > 0 ? (
+                {groupedSales.selectedRange.length > 0 ? (
                   <div className="divide-y divide-slate-100">
-                    {groupedSales.last7Days.map((sale) => (
+                    {groupedSales.selectedRange.map((sale) => (
                       <SaleItem 
                         key={sale.id} 
                         sale={sale} 
@@ -1469,7 +1633,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="py-8 text-center text-slate-400 text-sm italic">
-                    Nenhuma venda nos últimos 7 dias
+                    Nenhuma venda no período selecionado
                   </div>
                 )}
               </div>
@@ -2006,6 +2170,24 @@ export default function App() {
                 </div>
 
                 <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-600 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500" /> Custo Unitário (Despesa) (R$)
+                  </label>
+                  <input 
+                    required
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    name="cost"
+                    value={formData.cost}
+                    onChange={handleInputChange}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="Quanto você pagou por cada unidade"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
                   <label className="text-sm font-bold text-slate-600">Forma de Pagamento</label>
                   <div className="grid grid-cols-3 gap-2">
                     <PaymentMethodButton 
@@ -2128,8 +2310,12 @@ export default function App() {
                   <input required type="text" name="name" value={productFormData.name} onChange={handleProductInputChange} placeholder="Ex: Corte de Cabelo, Pizza..." className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-bold text-slate-300">Preço Padrão (R$)</label>
+                  <label className="text-sm font-bold text-slate-300">Preço de Venda (R$)</label>
                   <input required type="number" step="0.01" min="0" name="price" value={productFormData.price} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-300">Custo (Despesa) (R$)</label>
+                  <input required type="number" step="0.01" min="0" name="cost" value={productFormData.cost} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
                 </div>
                 <button 
                   type="submit" 
@@ -2418,12 +2604,13 @@ function PaymentMethodButton({ active, onClick, icon, label, primaryColor }: { a
     </button>
   );
 }
-function StatCard({ title, value, subtitle, icon, color, primaryColor }: { title: string, value: string, subtitle: string, icon: React.ReactNode, color: 'indigo' | 'emerald' | 'amber' | 'slate', primaryColor?: string }) {
+function StatCard({ title, value, subtitle, icon, color, primaryColor }: { title: string, value: string, subtitle: string, icon: React.ReactNode, color: 'indigo' | 'emerald' | 'amber' | 'slate' | 'rose', primaryColor?: string }) {
   const colors = {
     indigo: 'border-primary/20 bg-white shadow-sm',
     emerald: 'bg-emerald-50 border-emerald-100 shadow-sm',
     amber: 'bg-amber-50 border-amber-100 shadow-sm',
-    slate: 'bg-slate-50 border-slate-200 shadow-sm'
+    slate: 'bg-slate-50 border-slate-200 shadow-sm',
+    rose: 'bg-rose-50 border-rose-100 shadow-sm'
   };
 
   return (
@@ -2512,6 +2699,11 @@ function SaleItem({ sale, onEdit, onDelete, formatCurrency, isAdmin }: SaleItemP
             <span className="flex items-center gap-1">
               <Package className="w-3 h-3 opacity-50" /> {sale.quantidade}x {formatCurrency(sale.valor)}
             </span>
+            {sale.cost > 0 && (
+              <span className="flex items-center gap-1 text-rose-400">
+                <AlertCircle className="w-3 h-3" /> Despesa: {formatCurrency(Number(sale.cost) * sale.quantidade)}
+              </span>
+            )}
             {sale.cliente_nome && (
               <span className="flex items-center gap-1 text-primary font-bold">
                 <User className="w-3 h-3" /> {sale.cliente_nome}
@@ -2539,6 +2731,14 @@ function SaleItem({ sale, onEdit, onDelete, formatCurrency, isAdmin }: SaleItemP
       <div className="flex items-center gap-4">
         <div className="text-right">
           <div className="font-black text-slate-900">{formatCurrency(sale.valor * sale.quantidade)}</div>
+          {sale.cost > 0 && (
+            <div className={cn(
+              "text-[9px] font-black uppercase",
+              (sale.valor - sale.cost) >= 0 ? "text-emerald-500" : "text-rose-500"
+            )}>
+              Lucro: {formatCurrency((sale.valor - sale.cost) * sale.quantidade)}
+            </div>
+          )}
         </div>
         
         <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
