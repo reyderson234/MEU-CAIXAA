@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: var(--primary-color);
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+:root {
+  --primary-color: #4f46e5;
+  --bg-main: #0f172a; /* slate-900 */
+  --bg-card: #1e293b; /* slate-800 */
+  --text-main: #f8fafc; /* slate-50 */
+  --text-muted: #94a3b8; /* slate-400 */
+  --border-color: #334155; /* slate-700 */
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+}
+
+.text-primary {
+  color: var(--primary-color);
+}
+
+.bg-primary {
+  background-color: var(--primary-color);
+}
+
+.border-primary {
+  border-color: var(--primary-color);
+}
+
+.ring-primary {
+  --tw-ring-color: var(--primary-color);
+}
+
+.focus-primary:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color), transparent 80%);
+}
