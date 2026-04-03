@@ -189,6 +189,7 @@ export default function App() {
   const [dashboardStartDate, setDashboardStartDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
   const [dashboardEndDate, setDashboardEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
+  const [isExpired, setIsExpired] = useState(false);
 
   // Update dates when range type changes
   useEffect(() => {
@@ -251,6 +252,39 @@ export default function App() {
     
     const userEmail = session.user.email?.toLowerCase() || '';
     const isHardcodedAdmin = userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
+    
+    // Check expiration for non-admins
+    if (!isHardcodedAdmin) {
+      try {
+        const { data: accessData } = await supabase
+          .from('accesses')
+          .select('data_validade')
+          .eq('email', userEmail)
+          .maybeSingle();
+
+        if (accessData) {
+          const expirationDate = new Date(accessData.data_validade);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          
+          if (expirationDate < today) {
+            setIsExpired(true);
+          } else {
+            setIsExpired(false);
+          }
+        } else {
+          // If no access record found for a non-hardcoded admin, we might want to restrict or allow
+          // For now, let's assume if they have a Supabase account but no access record, they might be new
+          // or we should block them. The user said "painel ta liberando acesso mesmo depois que passa da data"
+          // so we focus on the date check.
+          setIsExpired(false);
+        }
+      } catch (error) {
+        console.error('Error checking expiration:', error);
+      }
+    } else {
+      setIsExpired(false);
+    }
     
     try {
       const { data: profile } = await supabase
@@ -413,6 +447,22 @@ export default function App() {
           .maybeSingle();
 
         if (accessData) {
+          const userEmail = authEmail.toLowerCase();
+          const isAdminEmail = userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
+          
+          // Check expiration for custom access login
+          if (!isAdminEmail) {
+            const expirationDate = new Date(accessData.data_validade);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            if (expirationDate < today) {
+              setAuthError('Seu acesso expirou. Entre em contato com o suporte para renovação.');
+              setIsAuthLoading(false);
+              return;
+            }
+          }
+
           setUser({ email: userEmail });
           // Acessos gerados pelo painel NUNCA são admin, 
           // a menos que o e-mail seja um dos e-mails mestres.
@@ -440,6 +490,7 @@ export default function App() {
     await supabase.auth.signOut();
     setUser(null);
     setIsAdmin(false);
+    setIsExpired(false);
     setSales([]);
     setProducts([]);
     setAccesses([]);
@@ -1220,6 +1271,57 @@ export default function App() {
               </button>
             </form>
           </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (isExpired && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden text-center p-8 space-y-6"
+        >
+          <div className="bg-rose-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto">
+            <Clock className="w-10 h-10 text-rose-500" />
+          </div>
+          
+          <div className="space-y-2">
+            <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Acesso Expirado</h2>
+            <p className="text-slate-500 font-medium">
+              Sua licença de uso do <span className="font-bold text-primary">MEU CAIXA</span> chegou ao fim.
+            </p>
+          </div>
+
+          <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Para continuar gerenciando suas vendas e produtos, é necessário realizar a renovação do seu plano.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <a 
+              href="https://wa.me/554792082639?text=Olá, gostaria de renovar meu acesso ao Meu Caixa."
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-bold shadow-lg shadow-green-200 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <MessageCircle className="w-5 h-5" />
+              Renovar pelo WhatsApp
+            </a>
+            
+            <button 
+              onClick={handleLogout}
+              className="w-full bg-slate-100 text-slate-600 py-3 rounded-2xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              Sair da Conta
+            </button>
+          </div>
+          
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Suporte: (47) 9208-2639</p>
         </motion.div>
       </div>
     );
