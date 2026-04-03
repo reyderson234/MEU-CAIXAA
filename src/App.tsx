@@ -17,6 +17,9 @@ import {
   Check,
   Filter,
   ArrowLeft,
+  ArrowUpRight,
+  ArrowDownRight,
+  History,
   User,
   Phone,
   FileText,
@@ -92,6 +95,18 @@ interface Product {
   name: string;
   price: number;
   cost: number;
+  initial_stock: number;
+  user_email?: string;
+  created_at?: string;
+}
+
+interface InventoryMovement {
+  id: string;
+  product_id: string;
+  product_name: string;
+  type: 'entrada' | 'saida';
+  quantity: number;
+  date: string;
   user_email?: string;
   created_at?: string;
 }
@@ -132,13 +147,14 @@ const STORAGE_KEYS = {
   ACCESSES: 'meucaixa_accesses'
 };
 
-type ViewType = 'sales' | 'products' | 'customers' | 'accesses';
+type ViewType = 'sales' | 'products' | 'customers' | 'accesses' | 'inventory';
 type FilterType = 'today' | 'week' | 'month' | 'all';
 
 export default function App() {
   const [view, setView] = useState<ViewType>('sales');
   const [sales, setSales] = useState<Sale[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [movements, setMovements] = useState<InventoryMovement[]>([]);
   const [accesses, setAccesses] = useState<Access[]>([]);
   const [customers, setCustomers] = useState<{ 
     nome: string, 
@@ -169,6 +185,7 @@ export default function App() {
   
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isProductFormOpen, setIsProductFormOpen] = useState(false);
+  const [isMovementFormOpen, setIsMovementFormOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<string | null>(null);
   const [isProductDeleteModalOpen, setIsProductDeleteModalOpen] = useState<string | null>(null);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -236,7 +253,15 @@ export default function App() {
   const [productFormData, setProductFormData] = useState({
     name: '',
     price: 0,
-    cost: 0
+    cost: 0,
+    initial_stock: 0
+  });
+
+  const [movementFormData, setMovementFormData] = useState({
+    product_id: '',
+    type: 'entrada' as 'entrada' | 'saida',
+    quantity: 1,
+    date: format(new Date(), 'yyyy-MM-dd')
   });
 
   const [accessFormData, setAccessFormData] = useState({
@@ -390,22 +415,26 @@ export default function App() {
     try {
       let salesQuery = supabase.from('sales').select('*').order('data', { ascending: false });
       let productsQuery = supabase.from('products').select('*').order('name');
+      let movementsQuery = supabase.from('inventory_movements').select('*').order('date', { ascending: false });
       
       // Data Isolation: If not admin, strictly filter by user_email
       if (!targetIsAdmin) {
         salesQuery = salesQuery.eq('user_email', targetEmail);
         productsQuery = productsQuery.eq('user_email', targetEmail);
+        movementsQuery = movementsQuery.eq('user_email', targetEmail);
       }
 
-      const [salesRes, productsRes, accessesRes] = await Promise.all([
+      const [salesRes, productsRes, accessesRes, movementsRes] = await Promise.all([
         salesQuery,
         productsQuery,
-        supabase.from('accesses').select('*').order('created_at', { ascending: false })
+        supabase.from('accesses').select('*').order('created_at', { ascending: false }),
+        movementsQuery
       ]);
 
       if (salesRes.data) setSales(salesRes.data);
       if (productsRes.data) setProducts(productsRes.data);
       if (accessesRes.data) setAccesses(accessesRes.data);
+      if (movementsRes.data) setMovements(movementsRes.data);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -647,6 +676,22 @@ export default function App() {
     };
   }, [customers]);
 
+  const inventoryStats = useMemo(() => {
+    return products.map(product => {
+      const productMovements = movements.filter(m => m.product_id === product.id);
+      const entries = productMovements.filter(m => m.type === 'entrada').reduce((acc, m) => acc + Number(m.quantity || 0), 0);
+      const exits = productMovements.filter(m => m.type === 'saida').reduce((acc, m) => acc + Number(m.quantity || 0), 0);
+      const finalStock = (Number(product.initial_stock) || 0) + entries - exits;
+      
+      return {
+        ...product,
+        entries,
+        exits,
+        finalStock
+      };
+    });
+  }, [products, movements]);
+
   const stats = useMemo(() => {
     const rangeStart = startOfDay(parseISO(dashboardStartDate));
     const rangeEnd = endOfDay(parseISO(dashboardEndDate));
@@ -664,16 +709,16 @@ export default function App() {
         const saleDateStr = s.data.substring(0, 10);
         return saleDateStr >= startStr && saleDateStr <= endStr;
       });
-      const total = rangeSales.reduce((acc, s) => acc + (Number(s.valor || 0) * s.quantidade), 0);
-      const expenses = rangeSales.reduce((acc, s) => acc + (Number(s.cost || 0) * s.quantidade), 0);
+      const total = rangeSales.reduce((acc, s) => acc + (Number(s.valor || 0) * Number(s.quantidade || 0)), 0);
+      const expenses = rangeSales.reduce((acc, s) => acc + (Number(s.cost || 0) * Number(s.quantidade || 0)), 0);
       return {
         total,
         expenses,
         profit: total - expenses,
-        paid: rangeSales.filter(s => s.status === 'pago').reduce((acc, s) => acc + (s.valor * s.quantidade), 0),
-        pending: rangeSales.filter(s => s.status === 'pendente').reduce((acc, s) => acc + (s.valor * s.quantidade), 0),
+        paid: rangeSales.filter(s => s.status === 'pago').reduce((acc, s) => acc + (Number(s.valor || 0) * Number(s.quantidade || 0)), 0),
+        pending: rangeSales.filter(s => s.status === 'pendente').reduce((acc, s) => acc + (Number(s.valor || 0) * Number(s.quantidade || 0)), 0),
         count: rangeSales.length,
-        items: rangeSales.reduce((acc, s) => acc + s.quantidade, 0)
+        items: rangeSales.reduce((acc, s) => acc + Number(s.quantidade || 0), 0)
       };
     };
 
@@ -743,7 +788,7 @@ export default function App() {
       metodo_pagamento: formData.metodo_pagamento,
       cliente_nome: formData.cliente_nome,
       cliente_whatsapp: formData.cliente_whatsapp,
-      data: formData.date + 'T12:00:00.000Z'
+      data: formData.date + 'T00:00:00.000Z'
     };
 
     console.log('Saving sale:', saleData);
@@ -762,6 +807,19 @@ export default function App() {
           .from('sales')
           .insert([saleData]);
         if (error) throw error;
+
+        // Create automatic inventory movement
+        const product = products.find(p => p.name === saleData.nome);
+        if (product) {
+          await supabase.from('inventory_movements').insert([{
+            user_email: user.email.toLowerCase(),
+            product_id: product.id,
+            product_name: product.name,
+            type: 'saida',
+            quantity: saleData.quantidade,
+            date: saleData.data
+          }]);
+        }
         
         showNotification('Venda cadastrada com sucesso!');
         confetti({
@@ -793,7 +851,8 @@ export default function App() {
       user_email: user.email.toLowerCase(),
       name: productFormData.name,
       price: productFormData.price,
-      cost: productFormData.cost
+      cost: productFormData.cost,
+      initial_stock: productFormData.initial_stock
     };
 
     console.log('Saving product:', productData);
@@ -819,6 +878,35 @@ export default function App() {
     } catch (error: any) {
       console.error('Error saving product:', error);
       showNotification(`Erro ao salvar produto: ${error.message || 'Erro desconhecido'}`, 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleMovementSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+
+    setIsSaving(true);
+    const product = products.find(p => p.id === movementFormData.product_id);
+    const movementData = {
+      user_email: user.email.toLowerCase(),
+      product_id: movementFormData.product_id,
+      product_name: product?.name || 'Produto Desconhecido',
+      type: movementFormData.type,
+      quantity: movementFormData.quantity,
+      date: movementFormData.date + 'T00:00:00.000Z'
+    };
+
+    try {
+      const { error } = await supabase.from('inventory_movements').insert([movementData]);
+      if (error) throw error;
+      showNotification('Movimentação registrada com sucesso!');
+      await fetchData();
+      setIsMovementFormOpen(false);
+    } catch (error: any) {
+      console.error('Error saving movement:', error);
+      showNotification(`Erro ao salvar movimentação: ${error.message}`, 'error');
     } finally {
       setIsSaving(false);
     }
@@ -891,16 +979,18 @@ export default function App() {
     if (product) {
       setEditingProduct(product);
       setProductFormData({
-        name: product.name,
-        price: product.price,
-        cost: product.cost || 0
+        name: product.name || '',
+        price: product.price || 0,
+        cost: product.cost || 0,
+        initial_stock: product.initial_stock || 0
       });
     } else {
       setEditingProduct(null);
       setProductFormData({
         name: '',
         price: 0,
-        cost: 0
+        cost: 0,
+        initial_stock: 0
       });
     }
     setIsProductFormOpen(true);
@@ -956,7 +1046,7 @@ export default function App() {
       nome: accessFormData.nome,
       email: accessFormData.email,
       senha: accessFormData.senha,
-      data_validade: new Date(accessFormData.data_validade + 'T12:00:00').toISOString(),
+      data_validade: accessFormData.data_validade + 'T00:00:00.000Z',
       valor_pago: accessFormData.valor_pago
     };
 
@@ -1434,6 +1524,15 @@ export default function App() {
                   >
                     <Users className="w-4 h-4" /> Clientes
                   </button>
+                  <button 
+                    onClick={() => setView('inventory')}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                      view === 'inventory' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    <Package className="w-4 h-4" /> Estoque
+                  </button>
                 </>
               )}
               {isAdmin && (
@@ -1463,13 +1562,14 @@ export default function App() {
                 if (view === 'sales') openForm();
                 else if (view === 'products') openProductForm();
                 else if (view === 'accesses') openAccessForm();
+                else if (view === 'inventory') setIsMovementFormOpen(true);
               }}
               className="bg-primary text-white px-4 py-2 rounded-xl font-semibold flex items-center gap-2 transition-all active:scale-95 shadow-lg"
               style={{ boxShadow: `0 10px 15px -3px ${primaryColor}40` }}
             >
               <Plus className="w-5 h-5" />
               <span className="hidden sm:inline">
-                {view === 'sales' ? 'Nova Venda' : view === 'products' ? 'Novo Produto' : 'Novo Acesso'}
+                {view === 'sales' ? 'Nova Venda' : view === 'products' ? 'Novo Produto' : view === 'inventory' ? 'Nova Movimentação' : 'Novo Acesso'}
               </span>
             </button>
           </div>
@@ -1512,6 +1612,17 @@ export default function App() {
             >
               <Users className="w-6 h-6" />
               <span className="text-[10px] font-black uppercase tracking-tighter">Clientes</span>
+            </button>
+            <button 
+              onClick={() => setView('inventory')}
+              className={cn(
+                "flex flex-col items-center gap-1 transition-all",
+                view === 'inventory' ? "text-primary scale-110" : "text-slate-400"
+              )}
+              style={view === 'inventory' ? { color: primaryColor } : {}}
+            >
+              <Package className="w-6 h-6" />
+              <span className="text-[10px] font-black uppercase tracking-tighter">Estoque</span>
             </button>
           </>
         )}
@@ -1943,6 +2054,124 @@ export default function App() {
               </button>
             </div>
           </section>
+        ) : view === 'inventory' ? (
+          <section className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-black text-slate-800">Controle de Estoque</h2>
+              <button 
+                onClick={() => {
+                  setMovementFormData({
+                    product_id: '',
+                    type: 'entrada',
+                    quantity: 1,
+                    date: format(new Date(), 'yyyy-MM-dd')
+                  });
+                  setIsMovementFormOpen(true);
+                }}
+                className="bg-primary text-white px-4 py-2 rounded-2xl font-bold text-sm flex items-center gap-2 shadow-lg shadow-primary/20 active:scale-95 transition-all"
+                style={{ backgroundColor: primaryColor }}
+              >
+                <Plus className="w-4 h-4" /> Novo Movimento
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-6">
+              {/* Products Stock Table */}
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                    <Package className="w-5 h-5 text-primary" style={{ color: primaryColor }} />
+                    Resumo de Produtos
+                  </h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50/50">
+                        <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Produto</th>
+                        <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 text-center">Qtd Inicial</th>
+                        <th className="px-6 py-4 text-[10px] font-black text-emerald-500 uppercase tracking-widest border-b border-slate-100 text-center">Entradas</th>
+                        <th className="px-6 py-4 text-[10px] font-black text-rose-500 uppercase tracking-widest border-b border-slate-100 text-center">Saídas</th>
+                        <th className="px-6 py-4 text-[10px] font-black text-primary uppercase tracking-widest border-b border-slate-100 text-center" style={{ color: primaryColor }}>Estoque Final</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {inventoryStats.map(item => (
+                        <tr 
+                          key={item.id} 
+                          className={cn(
+                            "transition-colors",
+                            item.finalStock <= 5 ? "bg-rose-50 hover:bg-rose-100/50" : 
+                            item.finalStock >= 6 && item.finalStock <= 8 ? "bg-amber-50 hover:bg-amber-100/50" : 
+                            "hover:bg-slate-50/50"
+                          )}
+                        >
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-slate-800">{item.name}</div>
+                          </td>
+                          <td className="px-6 py-4 text-center font-medium text-slate-600">{item.initial_stock}</td>
+                          <td className="px-6 py-4 text-center font-bold text-emerald-600">+{item.entries}</td>
+                          <td className="px-6 py-4 text-center font-bold text-rose-600">-{item.exits}</td>
+                          <td className="px-6 py-4 text-center">
+                            <span className={cn(
+                              "px-3 py-1 rounded-full font-black text-sm",
+                              item.finalStock <= 5 ? "bg-rose-100 text-rose-600" : 
+                              item.finalStock >= 6 && item.finalStock <= 8 ? "bg-amber-100 text-amber-600" :
+                              "bg-emerald-100 text-emerald-600"
+                            )}>
+                              {item.finalStock}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Movements Log */}
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                    <History className="w-5 h-5 text-primary" style={{ color: primaryColor }} />
+                    Movimentações Recentes
+                  </h3>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {movements.length > 0 ? (
+                    movements.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(movement => (
+                      <div key={movement.id} className="px-6 py-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
+                        <div className="flex items-center gap-4">
+                          <div className={cn(
+                            "w-10 h-10 rounded-xl flex items-center justify-center",
+                            movement.type === 'entrada' ? "bg-emerald-100 text-emerald-600" : "bg-rose-100 text-rose-600"
+                          )}>
+                            {movement.type === 'entrada' ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownRight className="w-5 h-5" />}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-800">{movement.product_name}</div>
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">
+                              {format(parseISO(movement.date), "dd/MM/yyyy 'às' HH:mm")}
+                            </div>
+                          </div>
+                        </div>
+                        <div className={cn(
+                          "font-black text-lg",
+                          movement.type === 'entrada' ? "text-emerald-600" : "text-rose-600"
+                        )}>
+                          {movement.type === 'entrada' ? '+' : '-'}{movement.quantity}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="py-12 text-center text-slate-400 text-sm italic">
+                      Nenhuma movimentação registrada
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
         ) : (
           <section className="space-y-6 pb-10">
             <div className="flex items-center justify-between">
@@ -2203,7 +2432,7 @@ export default function App() {
                       required
                       type="date"
                       name="date"
-                      value={formData.date}
+                      value={formData.date || ''}
                       onChange={handleInputChange}
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900"
                     />
@@ -2219,7 +2448,7 @@ export default function App() {
                       required
                       type="text"
                       name="cliente_nome"
-                      value={formData.cliente_nome}
+                      value={formData.cliente_nome || ''}
                       onChange={handleInputChange}
                       placeholder="Ex: João Silva"
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900"
@@ -2233,7 +2462,7 @@ export default function App() {
                       required
                       type="tel"
                       name="cliente_whatsapp"
-                      value={formData.cliente_whatsapp}
+                      value={formData.cliente_whatsapp || ''}
                       onChange={handleInputChange}
                       placeholder="(00) 00000-0000"
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900"
@@ -2249,7 +2478,7 @@ export default function App() {
                       type="number"
                       min="1"
                       name="quantidade"
-                      value={formData.quantidade}
+                      value={formData.quantidade || 0}
                       onChange={handleInputChange}
                       onFocus={(e) => e.target.select()}
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900"
@@ -2263,7 +2492,7 @@ export default function App() {
                       step="0.01"
                       min="0"
                       name="valor"
-                      value={formData.valor}
+                      value={formData.valor || 0}
                       onChange={handleInputChange}
                       onFocus={(e) => e.target.select()}
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900"
@@ -2281,7 +2510,7 @@ export default function App() {
                     step="0.01"
                     min="0"
                     name="cost"
-                    value={formData.cost}
+                    value={formData.cost || 0}
                     onChange={handleInputChange}
                     onFocus={(e) => e.target.select()}
                     placeholder="Quanto você pagou por cada unidade"
@@ -2322,7 +2551,7 @@ export default function App() {
                   </label>
                   <textarea 
                     name="descricao"
-                    value={formData.descricao}
+                    value={formData.descricao || ''}
                     onChange={handleInputChange}
                     placeholder="Alguma observação sobre esta venda..."
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus-primary outline-none transition-all bg-slate-50 text-slate-900 min-h-[100px] resize-none"
@@ -2409,15 +2638,19 @@ export default function App() {
               <form onSubmit={handleProductSubmit} className="p-6 space-y-5">
                 <div className="space-y-1.5">
                   <label className="text-sm font-bold text-slate-300">Nome do Produto/Serviço</label>
-                  <input required type="text" name="name" value={productFormData.name} onChange={handleProductInputChange} placeholder="Ex: Corte de Cabelo, Pizza..." className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
+                  <input required type="text" name="name" value={productFormData.name || ''} onChange={handleProductInputChange} placeholder="Ex: Corte de Cabelo, Pizza..." className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-bold text-slate-300">Preço de Venda (R$)</label>
-                  <input required type="number" step="0.01" min="0" name="price" value={productFormData.price} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
+                  <input required type="number" step="0.01" min="0" name="price" value={productFormData.price || 0} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-bold text-slate-300">Custo (Despesa) (R$)</label>
-                  <input required type="number" step="0.01" min="0" name="cost" value={productFormData.cost} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
+                  <input required type="number" step="0.01" min="0" name="cost" value={productFormData.cost || 0} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-300">Estoque Inicial</label>
+                  <input required type="number" min="0" name="initial_stock" value={productFormData.initial_stock || 0} onChange={handleProductInputChange} className="w-full px-4 py-3 rounded-xl border border-slate-700 outline-none focus-primary bg-slate-800 text-slate-100" />
                 </div>
                 <button 
                   type="submit" 
@@ -2426,6 +2659,87 @@ export default function App() {
                   style={{ boxShadow: `0 10px 15px -3px ${primaryColor}40`, backgroundColor: primaryColor }}
                 >
                   {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : (editingProduct ? 'Atualizar Item' : 'Cadastrar Item')}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Movement Form Modal */}
+      <AnimatePresence>
+        {isMovementFormOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsMovementFormOpen(false)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
+              <div className="px-6 py-6 border-b border-slate-100 flex justify-between items-center">
+                <h3 className="text-xl font-bold text-slate-800">Nova Movimentação</h3>
+                <button onClick={() => setIsMovementFormOpen(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X className="w-6 h-6 text-slate-400" /></button>
+              </div>
+              <form onSubmit={handleMovementSubmit} className="p-6 space-y-5">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-600">Produto</label>
+                  <select 
+                    required 
+                    name="product_id" 
+                    value={movementFormData.product_id || ''} 
+                    onChange={(e) => setMovementFormData(prev => ({ ...prev, product_id: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus-primary bg-slate-50 text-slate-900"
+                  >
+                    <option value="">Selecione um produto...</option>
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-600">Tipo de Movimentação</label>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setMovementFormData(prev => ({ ...prev, type: 'entrada' }))}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl font-bold border transition-all flex items-center justify-center gap-2",
+                        movementFormData.type === 'entrada' 
+                          ? "bg-emerald-50 border-emerald-200 text-emerald-600 ring-2 ring-emerald-500/10" 
+                          : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+                      )}
+                    >
+                      <ArrowUpRight className="w-5 h-5" /> Entrada
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMovementFormData(prev => ({ ...prev, type: 'saida' }))}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl font-bold border transition-all flex items-center justify-center gap-2",
+                        movementFormData.type === 'saida' 
+                          ? "bg-rose-50 border-rose-200 text-rose-600 ring-2 ring-rose-500/10" 
+                          : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+                      )}
+                    >
+                      <ArrowDownRight className="w-5 h-5" /> Saída
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-600">Quantidade</label>
+                  <input 
+                    required 
+                    type="number" 
+                    min="1" 
+                    name="quantity" 
+                    value={movementFormData.quantity || 0} 
+                    onChange={(e) => setMovementFormData(prev => ({ ...prev, quantity: parseInt(e.target.value) }))}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus-primary bg-slate-50 text-slate-900" 
+                  />
+                </div>
+                <button 
+                  type="submit" 
+                  disabled={isSaving}
+                  className="w-full bg-primary text-white py-4 rounded-xl font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:scale-100" 
+                  style={{ boxShadow: `0 10px 15px -3px ${primaryColor}40`, backgroundColor: primaryColor }}
+                >
+                  {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Registrar Movimentação'}
                 </button>
               </form>
             </motion.div>
@@ -2527,7 +2841,7 @@ export default function App() {
                       <input 
                         type="text" 
                         required
-                        value={accessFormData.nome}
+                        value={accessFormData.nome || ''}
                         onChange={(e) => setAccessFormData({...accessFormData, nome: e.target.value})}
                         className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
                         placeholder="Nome do usuário"
@@ -2541,7 +2855,7 @@ export default function App() {
                       <input 
                         type="email" 
                         required
-                        value={accessFormData.email}
+                        value={accessFormData.email || ''}
                         onChange={(e) => setAccessFormData({...accessFormData, email: e.target.value})}
                         className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
                         placeholder="email@exemplo.com"
@@ -2558,7 +2872,7 @@ export default function App() {
                       <input 
                         type="text" 
                         required
-                        value={accessFormData.senha}
+                        value={accessFormData.senha || ''}
                         onChange={(e) => setAccessFormData({...accessFormData, senha: e.target.value})}
                         className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
                         placeholder="Senha de acesso"
@@ -2572,7 +2886,7 @@ export default function App() {
                       <input 
                         type="date" 
                         required
-                        value={accessFormData.data_validade}
+                        value={accessFormData.data_validade || ''}
                         onChange={(e) => setAccessFormData({...accessFormData, data_validade: e.target.value})}
                         className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
                       />
