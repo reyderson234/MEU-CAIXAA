@@ -308,14 +308,11 @@ export default function App() {
           
           if (expirationDate < now) {
             setIsExpired(true);
+            // We no longer block access here, just set the state
           } else {
             setIsExpired(false);
           }
         } else {
-          // If no access record found for a non-hardcoded admin, we might want to restrict or allow
-          // For now, let's assume if they have a Supabase account but no access record, they might be new
-          // or we should block them. The user said "painel ta liberando acesso mesmo depois que passa da data"
-          // so we focus on the date check.
           setIsExpired(false);
         }
       } catch (error) {
@@ -417,6 +414,13 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Show expiration notification
+  useEffect(() => {
+    if (user && isExpired && !isAdmin) {
+      showNotification('Seu acesso expirou. Entre em contato com o suporte para renovação.', 'error');
+    }
+  }, [user, isExpired, isAdmin]);
+
   const fetchData = async (overrideEmail?: string, overrideIsAdmin?: boolean) => {
     if (!isSupabaseConfigured) return;
     
@@ -516,9 +520,11 @@ export default function App() {
             const now = new Date();
             
             if (expirationDate < now) {
-              setAuthError('Seu acesso expirou. Entre em contato com o suporte para renovação.');
-              setIsAuthLoading(false);
-              return;
+              console.log('Login Debug: Access expired, but allowing entry with notification');
+              setIsExpired(true);
+              // Don't return, allow login
+            } else {
+              setIsExpired(false);
             }
           }
 
@@ -1614,57 +1620,6 @@ export default function App() {
               </form>
             )}
           </div>
-        </motion.div>
-      </div>
-    );
-  }
-
-  if (isExpired && !isAdmin) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden text-center p-8 space-y-6"
-        >
-          <div className="bg-rose-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto">
-            <Clock className="w-10 h-10 text-rose-500" />
-          </div>
-          
-          <div className="space-y-2">
-            <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Acesso Expirado</h2>
-            <p className="text-slate-500 font-medium">
-              Sua licença de uso do <span className="font-bold text-primary">MEU CAIXA</span> chegou ao fim.
-            </p>
-          </div>
-
-          <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
-            <p className="text-sm text-slate-600 leading-relaxed">
-              Para continuar gerenciando suas vendas e produtos, é necessário realizar a renovação do seu plano.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <a 
-              href="https://wa.me/554792082639?text=Olá, gostaria de renovar meu acesso ao Meu Caixa."
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-bold shadow-lg shadow-green-200 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
-            >
-              <MessageCircle className="w-5 h-5" />
-              Renovar pelo WhatsApp
-            </a>
-            
-            <button 
-              onClick={handleLogout}
-              className="w-full bg-slate-100 text-slate-600 py-3 rounded-2xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
-            >
-              <LogOut className="w-4 h-4" />
-              Sair da Conta
-            </button>
-          </div>
-          
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Suporte: (47) 9208-2639</p>
         </motion.div>
       </div>
     );
