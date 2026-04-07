@@ -623,6 +623,11 @@ export default function App() {
       setIsNewUser(true);
       setIsRegistering(false);
       
+      // Facebook Pixel Tracking
+      if ((window as any).fbq) {
+        (window as any).fbq('track', 'CompleteRegistration');
+      }
+      
       setUser({ email: cleanEmail });
       setIsAdmin(false);
       fetchData(cleanEmail, false);
@@ -967,6 +972,16 @@ export default function App() {
         }
         
         showNotification('Venda cadastrada com sucesso!');
+        
+        // Facebook Pixel Tracking
+        if ((window as any).fbq) {
+          (window as any).fbq('track', 'Purchase', {
+            value: saleData.valor,
+            currency: 'BRL',
+            content_name: saleData.nome
+          });
+        }
+
         confetti({
           particleCount: 150,
           spread: 70,
