@@ -25,6 +25,7 @@ import {
   FileText,
   Clock,
   CheckCircle2,
+  Bookmark,
   CreditCard,
   Banknote,
   QrCode,
@@ -44,7 +45,8 @@ import {
   AlertCircle,
   AlertTriangle,
   Eye,
-  EyeOff
+  EyeOff,
+  Settings
 } from 'lucide-react';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval, parseISO, isSameDay, subDays, subMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -134,8 +136,11 @@ interface Access {
   nome: string;
   email: string;
   senha: string;
+  whatsapp?: string;
   data_validade: string;
   valor_pago: number;
+  codigo_verificacao?: string;
+  email_confirmado?: boolean;
   created_at: string;
 }
 
@@ -147,7 +152,7 @@ const STORAGE_KEYS = {
   ACCESSES: 'meucaixa_accesses'
 };
 
-type ViewType = 'sales' | 'products' | 'customers' | 'accesses' | 'inventory';
+type ViewType = 'sales' | 'products' | 'customers' | 'accesses' | 'inventory' | 'settings';
 type FilterType = 'today' | 'week' | 'month' | 'all';
 
 export default function App() {
@@ -207,6 +212,15 @@ export default function App() {
   const [dashboardEndDate, setDashboardEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
   const [isExpired, setIsExpired] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [isNewUser, setIsNewUser] = useState(false);
+  const [trialConfig, setTrialConfig] = useState({ hours: 3, minutes: 0 });
+  const [registerFormData, setRegisterFormData] = useState({
+    nome: '',
+    email: '',
+    senha: '',
+    whatsapp: ''
+  });
 
   // Update dates when range type changes
   useEffect(() => {
@@ -268,6 +282,7 @@ export default function App() {
     nome: '',
     email: '',
     senha: '',
+    whatsapp: '',
     data_validade: format(subDays(new Date(), -30), 'yyyy-MM-dd'),
     valor_pago: 0
   });
@@ -289,10 +304,9 @@ export default function App() {
 
         if (accessData) {
           const expirationDate = new Date(accessData.data_validade);
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
+          const now = new Date();
           
-          if (expirationDate < today) {
+          if (expirationDate < now) {
             setIsExpired(true);
           } else {
             setIsExpired(false);
@@ -435,6 +449,17 @@ export default function App() {
       if (productsRes.data) setProducts(productsRes.data);
       if (accessesRes.data) setAccesses(accessesRes.data);
       if (movementsRes.data) setMovements(movementsRes.data);
+
+      // Fetch trial config
+      const { data: configData } = await supabase
+        .from('configs')
+        .select('*')
+        .eq('key', 'trial_duration')
+        .maybeSingle();
+      
+      if (configData && configData.value) {
+        setTrialConfig(configData.value);
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -447,11 +472,15 @@ export default function App() {
     setAuthError(null);
     setIsAuthLoading(true);
     
-    const userEmail = authEmail.toLowerCase();
+    const userEmail = authEmail.trim().toLowerCase();
+    const userPassword = authPassword.trim();
     const isAdminEmail = userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
     
+    console.log('Login Debug:', { userEmail, isAdminEmail });
+
     // Master password logic for admins
-    if (isAdminEmail && authPassword === 'admin123') {
+    if (isAdminEmail && userPassword === 'admin123') {
+      console.log('Login Debug: Master admin login successful');
       setUser({ email: userEmail });
       setIsAdmin(true);
       setView('accesses');
@@ -461,31 +490,32 @@ export default function App() {
     }
     
     try {
+      console.log('Login Debug: Attempting Supabase Auth...');
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: authEmail,
-        password: authPassword,
+        email: userEmail,
+        password: userPassword,
       });
 
       if (error) {
+        console.log('Login Debug: Supabase Auth failed, trying accesses table fallback...', error.message);
         // Fallback to custom accesses check if Supabase Auth fails
         const { data: accessData, error: accessError } = await supabase
           .from('accesses')
           .select('*')
-          .eq('email', authEmail)
-          .eq('senha', authPassword)
+          .eq('email', userEmail)
+          .eq('senha', userPassword)
           .maybeSingle();
 
         if (accessData) {
-          const userEmail = authEmail.toLowerCase();
+          console.log('Login Debug: Accesses table fallback successful');
           const isAdminEmail = userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
           
           // Check expiration for custom access login
           if (!isAdminEmail) {
             const expirationDate = new Date(accessData.data_validade);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            const now = new Date();
             
-            if (expirationDate < today) {
+            if (expirationDate < now) {
               setAuthError('Seu acesso expirou. Entre em contato com o suporte para renovação.');
               setIsAuthLoading(false);
               return;
@@ -493,25 +523,134 @@ export default function App() {
           }
 
           setUser({ email: userEmail });
-          // Acessos gerados pelo painel NUNCA são admin, 
-          // a menos que o e-mail seja um dos e-mails mestres.
           const isUserAdmin = isAdminEmail;
           setIsAdmin(isUserAdmin);
           if (isUserAdmin) setView('accesses');
           fetchData(userEmail, isUserAdmin);
         } else {
+          console.log('Login Debug: All login attempts failed');
+          if (accessError) console.error('Login Debug: Accesses table error:', accessError);
+          
+          // Se não encontrou nem no Auth nem na tabela accesses
           if (error.message.includes('Email not confirmed')) {
-            setAuthError('E-mail ainda não confirmado no Supabase. Verifique sua caixa de entrada.');
+            setAuthError('E-mail ainda não confirmado. Verifique sua caixa de entrada.');
+          } else if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_credentials')) {
+            setAuthError('E-mail ou senha incorretos. Verifique seus dados.');
           } else {
-            setAuthError('E-mail ou senha incorretos.');
+            setAuthError(error.message);
           }
-          console.error('Auth error:', error.message);
         }
+      } else {
+        console.log('Login Debug: Supabase Auth successful');
+        const isAdminEmail = userEmail === 'reydersonp50@gmail.com' || userEmail === 'admin@gmail.com';
+        setUser({ email: userEmail });
+        setIsAdmin(isAdminEmail);
+        if (isAdminEmail) setView('accesses');
+        fetchData(userEmail, isAdminEmail);
       }
-    } catch (error) {
-      setAuthError('Erro ao realizar login.');
+    } catch (error: any) {
+      console.error('Login Debug: Unexpected error:', error);
+      setAuthError('Erro ao realizar login: ' + (error.message || 'Erro desconhecido'));
     } finally {
       setIsAuthLoading(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setIsAuthLoading(true);
+
+    const cleanEmail = registerFormData.email.trim().toLowerCase();
+    const cleanPassword = registerFormData.senha.trim();
+
+    console.log('Registration Debug:', { cleanEmail, trialConfig });
+
+    try {
+      // 1. Check if email already exists in accesses
+      console.log('Registration Debug: Checking if email exists...');
+      const { data: existingAccess } = await supabase
+        .from('accesses')
+        .select('id')
+        .eq('email', cleanEmail)
+        .maybeSingle();
+
+      if (existingAccess) {
+        console.log('Registration Debug: Email already exists');
+        setAuthError('Este e-mail já está cadastrado.');
+        setIsAuthLoading(false);
+        return;
+      }
+
+      // 2. Create access record with configured trial validity
+      console.log('Registration Debug: Creating access record...');
+      const expirationDate = new Date();
+      expirationDate.setHours(expirationDate.getHours() + trialConfig.hours);
+      expirationDate.setMinutes(expirationDate.getMinutes() + trialConfig.minutes);
+
+      const accessData = {
+        nome: registerFormData.nome.trim(),
+        email: cleanEmail,
+        senha: cleanPassword,
+        whatsapp: registerFormData.whatsapp.trim(),
+        data_validade: expirationDate.toISOString(),
+        valor_pago: 0,
+        email_confirmado: true
+      };
+
+      const { error: accessError } = await supabase
+        .from('accesses')
+        .insert([accessData]);
+
+      if (accessError) {
+        console.error('Registration Debug: Error inserting into accesses:', accessError);
+        throw accessError;
+      }
+
+      console.log('Registration Debug: Success!');
+      // 3. Automatically log in and show success
+      const trialText = trialConfig.hours > 0 
+        ? `${trialConfig.hours}h${trialConfig.minutes > 0 ? ` ${trialConfig.minutes}min` : ''}`
+        : `${trialConfig.minutes}min`;
+      
+      showNotification(`Cadastro realizado com sucesso! Você tem ${trialText} de teste.`);
+      setIsNewUser(true);
+      setIsRegistering(false);
+      
+      setUser({ email: cleanEmail });
+      setIsAdmin(false);
+      fetchData(cleanEmail, false);
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      setAuthError(error.message || 'Erro ao realizar cadastro.');
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const saveTrialConfig = async (hours: number, minutes: number) => {
+    setIsSaving(true);
+    try {
+      const { error } = await supabase
+        .from('configs')
+        .upsert({ 
+          key: 'trial_duration', 
+          value: { hours, minutes } 
+        }, { onConflict: 'key' });
+
+      if (error) throw error;
+      setTrialConfig({ hours, minutes });
+      showNotification('Configuração de teste salva com sucesso!');
+    } catch (error: any) {
+      console.error('Error saving trial config:', error);
+      const errorMsg = error.message || 'Erro desconhecido';
+      showNotification('Erro ao salvar: ' + errorMsg, 'error');
+      
+      if (errorMsg.includes('relation "configs" does not exist')) {
+        showNotification('A tabela "configs" não existe no Supabase. Execute o SQL que te enviei.', 'error');
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1013,6 +1152,7 @@ export default function App() {
         nome: access.nome,
         email: access.email,
         senha: access.senha,
+        whatsapp: access.whatsapp || '',
         data_validade: format(parseISO(access.data_validade), 'yyyy-MM-dd'),
         valor_pago: access.valor_pago
       });
@@ -1022,6 +1162,7 @@ export default function App() {
         nome: '',
         email: '',
         senha: '',
+        whatsapp: '',
         data_validade: format(subDays(new Date(), -30), 'yyyy-MM-dd'),
         valor_pago: 0
       });
@@ -1046,6 +1187,7 @@ export default function App() {
       nome: accessFormData.nome,
       email: accessFormData.email,
       senha: accessFormData.senha,
+      whatsapp: (accessFormData as any).whatsapp || '',
       data_validade: accessFormData.data_validade + 'T00:00:00.000Z',
       valor_pago: accessFormData.valor_pago
     };
@@ -1299,67 +1441,178 @@ export default function App() {
           </div>
 
           <div className="p-8">
-            <form onSubmit={handleAuth} className="space-y-4">
-              {authError && (
-                <div className="bg-rose-50 text-rose-600 p-3 rounded-xl text-xs font-bold flex items-center gap-2 border border-rose-100">
-                  <AlertCircle className="w-4 h-4" /> {authError}
-                </div>
-              )}
-              
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">E-mail do Administrador</label>
-                <div className="relative">
-                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input 
-                    type="email" 
-                    required
-                    value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    placeholder="admin@exemplo.com"
-                    className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Senha</label>
-                <div className="relative">
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input 
-                    type={showPassword ? "text" : "password"} 
-                    required
-                    value={authPassword}
-                    onChange={(e) => setAuthPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full pl-12 pr-12 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    {showPassword ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <button 
-                type="submit"
-                disabled={isAuthLoading}
-                className="w-full bg-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
-              >
-                {isAuthLoading ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <LogIn className="w-5 h-5" />
+            {isRegistering ? (
+              <form onSubmit={handleRegister} className="space-y-4">
+                <h3 className="text-xl font-bold text-slate-800 mb-4">Criar Um Teste</h3>
+                
+                {authError && (
+                  <div className="bg-rose-50 text-rose-600 p-3 rounded-xl text-xs font-bold flex items-center gap-2 border border-rose-100">
+                    <AlertCircle className="w-4 h-4" /> {authError}
+                  </div>
                 )}
-                Acessar Painel
-              </button>
-            </form>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
+                  <div className="relative">
+                    <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type="text" 
+                      required
+                      value={registerFormData.nome}
+                      onChange={(e) => setRegisterFormData({...registerFormData, nome: e.target.value})}
+                      placeholder="Seu nome"
+                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">WhatsApp</label>
+                  <div className="relative">
+                    <MessageCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type="text" 
+                      required
+                      value={registerFormData.whatsapp}
+                      onChange={(e) => setRegisterFormData({...registerFormData, whatsapp: e.target.value})}
+                      placeholder="47999999999"
+                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">E-mail</label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type="email" 
+                      required
+                      value={registerFormData.email}
+                      onChange={(e) => setRegisterFormData({...registerFormData, email: e.target.value})}
+                      placeholder="seu@email.com"
+                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Senha</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type="password" 
+                      required
+                      value={registerFormData.senha}
+                      onChange={(e) => setRegisterFormData({...registerFormData, senha: e.target.value})}
+                      placeholder="••••••••"
+                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={isAuthLoading}
+                  className="w-full bg-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
+                >
+                  {isAuthLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <UserPlus className="w-5 h-5" />
+                  )}
+                  Criar Um Teste
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => setIsRegistering(false)}
+                  className="w-full text-slate-500 py-2 text-sm font-bold hover:text-primary transition-colors"
+                >
+                  Já tenho uma conta? Entrar
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleAuth} className="space-y-4">
+                {authError && (
+                  <div className="bg-rose-50 text-rose-600 p-3 rounded-xl text-xs font-bold flex items-center gap-2 border border-rose-100">
+                    <AlertCircle className="w-4 h-4" /> {authError}
+                  </div>
+                )}
+                
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">E-mail do Administrador</label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type="email" 
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="admin@exemplo.com"
+                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Senha</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      required
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full pl-12 pr-12 py-3 rounded-2xl border border-slate-200 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all text-slate-900"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={isAuthLoading}
+                  className="w-full bg-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
+                >
+                  {isAuthLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <LogIn className="w-5 h-5" />
+                  )}
+                  Acessar Painel
+                </button>
+
+                <div className="relative py-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-slate-100"></div>
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-slate-400 font-bold">Ou</span>
+                  </div>
+                </div>
+
+                <button 
+                  type="button"
+                  onClick={() => setIsRegistering(true)}
+                  className="w-full bg-slate-50 text-slate-600 py-3 rounded-2xl font-bold border border-slate-200 hover:bg-slate-100 transition-all flex items-center justify-center gap-2"
+                >
+                  <UserPlus className="w-5 h-5" />
+                  Criar Um Teste
+                </button>
+              </form>
+            )}
           </div>
         </motion.div>
       </div>
@@ -1438,23 +1691,34 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-      {/* Notification */}
+
+      {/* New User Link Notification */}
       <AnimatePresence>
-        {notification && (
-          <motion.div
-            initial={{ opacity: 0, y: -50 }}
-            animate={{ opacity: 1, y: 20 }}
-            exit={{ opacity: 0, y: -50 }}
-            className={cn(
-              "fixed top-0 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-2xl shadow-2xl font-bold flex items-center gap-3 border",
-              notification.type === 'success' 
-                ? "bg-emerald-500 text-white border-emerald-400" 
-                : "bg-rose-500 text-white border-rose-400"
-            )}
-          >
-            {notification.type === 'success' ? <Check className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
-            {notification.message}
-          </motion.div>
+        {isNewUser && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl text-center space-y-6"
+            >
+              <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto text-primary">
+                <Bookmark className="w-10 h-10" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-2xl font-black text-slate-800 tracking-tight">Dica Importante! 🚀</h3>
+                <p className="text-slate-500 leading-relaxed">
+                  Para não perder o acesso ao seu painel, <span className="font-bold text-slate-700">salve o link desta página</span> nos seus favoritos ou na tela inicial do seu celular!
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsNewUser(false)}
+                className="w-full bg-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all"
+              >
+                Entendi, vou salvar!
+              </button>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
       <div 
@@ -1536,15 +1800,26 @@ export default function App() {
                 </>
               )}
               {isAdmin && (
-                <button 
-                  onClick={() => setView('accesses')}
-                  className={cn(
-                    "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                    view === 'accesses' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
-                  )}
-                >
-                  <ShieldCheck className="w-4 h-4" /> Painel Admin
-                </button>
+                <>
+                  <button 
+                    onClick={() => setView('accesses')}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                      view === 'accesses' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    <ShieldCheck className="w-4 h-4" /> Painel Admin
+                  </button>
+                  <button 
+                    onClick={() => setView('settings')}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                      view === 'settings' ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    <Settings className="w-4 h-4" /> Config
+                  </button>
+                </>
               )}
             </nav>
           </div>
@@ -1627,17 +1902,30 @@ export default function App() {
           </>
         )}
         {isAdmin && (
-          <button 
-            onClick={() => setView('accesses')}
-            className={cn(
-              "flex flex-col items-center gap-1 transition-all",
-              view === 'accesses' ? "text-primary scale-110" : "text-slate-400"
-            )}
-            style={view === 'accesses' ? { color: primaryColor } : {}}
-          >
-            <ShieldCheck className="w-6 h-6" />
-            <span className="text-[10px] font-black uppercase tracking-tighter">Admin</span>
-          </button>
+          <>
+            <button 
+              onClick={() => setView('accesses')}
+              className={cn(
+                "flex flex-col items-center gap-1 transition-all",
+                view === 'accesses' ? "text-primary scale-110" : "text-slate-400"
+              )}
+              style={view === 'accesses' ? { color: primaryColor } : {}}
+            >
+              <ShieldCheck className="w-6 h-6" />
+              <span className="text-[10px] font-black uppercase tracking-tighter">Admin</span>
+            </button>
+            <button 
+              onClick={() => setView('settings')}
+              className={cn(
+                "flex flex-col items-center gap-1 transition-all",
+                view === 'settings' ? "text-primary scale-110" : "text-slate-400"
+              )}
+              style={view === 'settings' ? { color: primaryColor } : {}}
+            >
+              <Settings className="w-6 h-6" />
+              <span className="text-[10px] font-black uppercase tracking-tighter">Config</span>
+            </button>
+          </>
         )}
       </div>
 
@@ -2020,6 +2308,11 @@ export default function App() {
                         <span className="text-xs font-bold text-slate-400 uppercase tracking-tight flex items-center gap-1">
                           <Mail className="w-3 h-3" /> {access.email}
                         </span>
+                        {access.whatsapp && (
+                          <span className="text-xs font-bold text-emerald-600 uppercase tracking-tight flex items-center gap-1">
+                            <MessageCircle className="w-3 h-3" /> {access.whatsapp}
+                          </span>
+                        )}
                         <span className="text-xs font-bold text-slate-400 uppercase tracking-tight flex items-center gap-1">
                           <Lock className="w-3 h-3" /> {access.senha}
                         </span>
@@ -2052,6 +2345,64 @@ export default function App() {
                 </div>
                 <span className="font-bold text-sm">Gerar Novo Acesso</span>
               </button>
+            </div>
+          </section>
+        ) : view === 'settings' && isAdmin ? (
+          <section className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <h2 className="text-2xl font-black text-slate-800">Configurações do Sistema</h2>
+                <p className="text-sm text-slate-500">Ajuste parâmetros globais da plataforma</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white p-8 rounded-[32px] border border-slate-200 shadow-sm space-y-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary" style={{ backgroundColor: `${primaryColor}15`, color: primaryColor }}>
+                    <Clock className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-800">Tempo de Teste</h3>
+                    <p className="text-xs text-slate-500">Duração do acesso gratuito para novos usuários</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Horas</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      max="72"
+                      value={trialConfig.hours}
+                      onChange={(e) => setTrialConfig(prev => ({ ...prev, hours: parseInt(e.target.value) || 0 }))}
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900 font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Minutos</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      max="59"
+                      value={trialConfig.minutes}
+                      onChange={(e) => setTrialConfig(prev => ({ ...prev, minutes: parseInt(e.target.value) || 0 }))}
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900 font-bold"
+                    />
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => saveTrialConfig(trialConfig.hours, trialConfig.minutes)}
+                  disabled={isSaving}
+                  className="w-full bg-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  style={{ backgroundColor: primaryColor }}
+                >
+                  {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
+                  Salvar Configuração
+                </button>
+              </div>
             </div>
           </section>
         ) : view === 'inventory' ? (
@@ -2907,6 +3258,20 @@ export default function App() {
                       onChange={(e) => setAccessFormData({...accessFormData, valor_pago: parseFloat(e.target.value) || 0})}
                       className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
                       placeholder="Valor que o usuário irá pagar"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">WhatsApp</label>
+                  <div className="relative">
+                    <MessageCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input 
+                      type="text" 
+                      value={accessFormData.whatsapp || ''}
+                      onChange={(e) => setAccessFormData({...accessFormData, whatsapp: e.target.value})}
+                      className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:border-primary outline-none transition-all text-slate-900"
+                      placeholder="47999999999"
                     />
                   </div>
                 </div>
